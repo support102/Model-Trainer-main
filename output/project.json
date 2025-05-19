@@ -1,0 +1,70 @@
+{
+  "input_path": "C:/Users/Sanskar Malviya/Desktop/Model-Trainer-main/input",
+  "output_path": "C:/Users/Sanskar Malviya/Desktop/Model-Trainer-main/output",
+  "labels": [
+    "Person",
+    "Car",
+    "Dog",
+    "Cat"
+  ],
+  "annotations": {
+    "image1.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            1325.4822335025378,
+            974.6192893401014
+          ],
+          [
+            2456.0406091370555,
+            2777.664974619289
+          ]
+        ],
+        "label": "Dog",
+        "color": "#e74c3c"
+      }
+    ],
+    "image2.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            2363.0650229635003,
+            2111.6751269035535
+          ],
+          [
+            3851.2932076383854,
+            3278.1242446217066
+          ]
+        ],
+        "label": "Dog",
+        "color": "#e74c3c"
+      }
+    ],
+    "image3.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            1327.3386511965193,
+            1608.8953347836596
+          ],
+          [
+            2704.9552816050277,
+            2383.176214648296
+          ]
+        ],
+        "label": "Dog",
+        "color": "#e74c3c"
+      }
+    ]
+  },
+  "label_colors": {
+    "Object": "#9b59b6",
+    "Person": "#34495e",
+    "Dog": "#e74c3c",
+    "Car": "#f39c12"
+  },
+  "last_saved": "2025-05-19 12:00:35"
+}
