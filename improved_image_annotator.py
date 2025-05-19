@@ -30,7 +30,7 @@ class ImageAnnotator:
         self.canvas = None
         self.annotations_per_image = {}
         self.label_list = []
-        self.current_label = StringVar(value="Object")
+        self.current_label = StringVar()  # Will be set once labels are loaded
         self.current_points = []
         self.label_colors = {}
         self.resized_images_cache = {}
@@ -83,61 +83,125 @@ class ImageAnnotator:
         for widget in self.root.winfo_children():
             widget.destroy()
             
-        # Create main frame with padding
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=BOTH, expand=True)
+        # Configure styles
+        self.style.configure("Title.TLabel", font=("Helvetica", 24, "bold"), foreground=self.theme["secondary"])
+        self.style.configure("Subtitle.TLabel", font=("Helvetica", 12), foreground=self.theme["dark"])
+        self.style.configure("Card.TFrame", background=self.theme["light"], relief="raised")
+        self.style.configure("Action.TButton", font=("Helvetica", 11), padding=10)
+        self.style.configure("Primary.TButton", background=self.theme["primary"], foreground="white")
         
-        # App title
+        # Create main frame with padding and background
+        main_frame = ttk.Frame(self.root, padding="40", style="Card.TFrame")
+        main_frame.pack(fill=BOTH, expand=True, padx=20, pady=20)
+        
+        # App title with enhanced styling
         title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=X, pady=(0, 20))
-        title_label = Label(title_frame, text="Image Annotator Pro", font=("Arial", 18, "bold"), fg=self.theme["secondary"])
-        title_label.pack()
-        subtitle_label = Label(title_frame, text="Create high-quality dataset annotations with ease", font=("Arial", 10), fg=self.theme["dark"])
-        subtitle_label.pack()
+        title_frame.pack(fill=X, pady=(0, 30))
+        ttk.Label(title_frame, text="Image Annotator Pro", style="Title.TLabel").pack()
+        ttk.Label(title_frame, 
+                 text="Streamline your dataset preparation with powerful annotation tools", 
+                 style="Subtitle.TLabel").pack(pady=(5, 0))
         
-        # Input section
-        input_frame = ttk.LabelFrame(main_frame, text="Dataset Configuration", padding="10")
-        input_frame.pack(fill=X, pady=10)
+        # Create a card-style container for the form
+        form_card = ttk.LabelFrame(main_frame, text="Project Configuration", padding="20")
+        form_card.pack(fill=X, pady=(0, 20))
         
-        # Input folder
-        input_folder_frame = ttk.Frame(input_frame)
-        input_folder_frame.pack(fill=X, pady=5)
-        ttk.Label(input_folder_frame, text="Input Images Folder:").pack(side=LEFT, padx=(0, 10))
-        self.input_entry = ttk.Entry(input_folder_frame, width=50)
+        # Input folder with icon
+        input_folder_frame = ttk.Frame(form_card)
+        input_folder_frame.pack(fill=X, pady=(0, 15))
+        ttk.Label(input_folder_frame, text="📁 Input Images Folder", 
+                 font=("Helvetica", 10, "bold")).pack(anchor=W, pady=(0, 5))
+        input_container = ttk.Frame(input_folder_frame)
+        input_container.pack(fill=X)
+        self.input_entry = ttk.Entry(input_container)
         self.input_entry.pack(side=LEFT, expand=True, fill=X, padx=(0, 10))
-        ttk.Button(input_folder_frame, text="Browse", command=lambda: self.input_entry.insert(0, filedialog.askdirectory()), style="Nav.TButton").pack(side=RIGHT)
+        ttk.Button(input_container, text="Browse", style="Action.TButton",
+                  command=lambda: self.browse_folder(self.input_entry)).pack(side=RIGHT)
         
-        # Output folder
-        output_folder_frame = ttk.Frame(input_frame)
-        output_folder_frame.pack(fill=X, pady=5)
-        ttk.Label(output_folder_frame, text="Output Folder:").pack(side=LEFT, padx=(0, 10))
-        self.output_entry = ttk.Entry(output_folder_frame, width=50)
+        # Output folder with icon
+        output_folder_frame = ttk.Frame(form_card)
+        output_folder_frame.pack(fill=X, pady=(0, 15))
+        ttk.Label(output_folder_frame, text="💾 Output Folder", 
+                 font=("Helvetica", 10, "bold")).pack(anchor=W, pady=(0, 5))
+        output_container = ttk.Frame(output_folder_frame)
+        output_container.pack(fill=X)
+        self.output_entry = ttk.Entry(output_container)
         self.output_entry.pack(side=LEFT, expand=True, fill=X, padx=(0, 10))
-        ttk.Button(output_folder_frame, text="Browse", command=lambda: self.output_entry.insert(0, filedialog.askdirectory()), style="Nav.TButton").pack(side=RIGHT)
+        ttk.Button(output_container, text="Browse", style="Action.TButton",
+                  command=lambda: self.browse_folder(self.output_entry)).pack(side=RIGHT)
         
-        # Label section
-        label_frame = ttk.Frame(input_frame)
-        label_frame.pack(fill=X, pady=5)
-        ttk.Label(label_frame, text="Object Labels (comma separated):").pack(side=LEFT, padx=(0, 10))
-        self.label_entry = ttk.Entry(label_frame, width=50)
-        self.label_entry.pack(side=LEFT, expand=True, fill=X)
+        # Labels section with icon
+        labels_frame = ttk.Frame(form_card)
+        labels_frame.pack(fill=X, pady=(0, 15))
+        ttk.Label(labels_frame, text="🏷️ Object Labels", 
+                 font=("Helvetica", 10, "bold")).pack(anchor=W, pady=(0, 5))
+        self.label_entry = ttk.Entry(labels_frame)
+        self.label_entry.pack(fill=X)
         self.label_entry.insert(0, "Person, Car, Dog, Cat")
+        ttk.Label(labels_frame, text="Separate labels with commas", 
+                 foreground=self.theme["dark"]).pack(anchor=W, pady=(2, 0))
         
-        # Load previous project
-        load_frame = ttk.Frame(main_frame)
-        load_frame.pack(fill=X, pady=10)
-        ttk.Button(load_frame, text="Load Previous Project", command=self.load_previous_project, style="Nav.TButton").pack(side=LEFT, padx=5)
-        
-        # Buttons section
+        # Action buttons with enhanced styling
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=X, pady=(20, 10))
-        ttk.Button(button_frame, text="Start New Project", command=self.proceed_to_annotation, style="Nav.TButton").pack(side=RIGHT, padx=5)
-        ttk.Button(button_frame, text="Exit", command=self.on_close, style="Nav.TButton").pack(side=RIGHT, padx=5)
         
-        # Version info
-        version_frame = ttk.Frame(main_frame)
-        version_frame.pack(fill=X, pady=10)
-        ttk.Label(version_frame, text="Version 2.0 | Created for dataset preparation").pack(side=RIGHT)
+        # Load project button with icon
+        load_btn = ttk.Button(button_frame, text="📂 Load Project", style="Action.TButton",
+                            command=self.load_previous_project)
+        load_btn.pack(side=LEFT)
+        
+        # Create separator
+        ttk.Frame(button_frame).pack(side=LEFT, expand=True)
+        
+        # Right-side buttons
+        ttk.Button(button_frame, text="❌ Exit", style="Action.TButton",
+                  command=self.on_close).pack(side=RIGHT, padx=(10, 0))
+        ttk.Button(button_frame, text="✨ Start New Project", style="Action.TButton",
+                  command=self.proceed_to_annotation).pack(side=RIGHT)
+        
+        # Footer with version and help
+        footer_frame = ttk.Frame(main_frame)
+        footer_frame.pack(fill=X, pady=(20, 0))
+        ttk.Label(footer_frame, text="Need help? Press F1 for documentation",
+                 foreground=self.theme["dark"]).pack(side=LEFT)
+        ttk.Label(footer_frame, text="Version 1.0",
+                 foreground=self.theme["dark"]).pack(side=RIGHT)
+        
+        # Add keyboard shortcuts
+        self.root.bind('<F1>', lambda e: self.show_help())
+        self.root.bind('<Return>', lambda e: self.proceed_to_annotation())
+        self.root.bind('<Escape>', lambda e: self.on_close())
+    
+    def browse_folder(self, entry_widget):
+        """Helper function to browse and update folder entry"""
+        # Clear the entry first
+        entry_widget.delete(0, END)
+        # Get the folder path
+        folder = filedialog.askdirectory()
+        if folder:
+            entry_widget.insert(0, folder)
+            
+    def show_help(self):
+        """Show help documentation"""
+        help_text = """
+Image Annotator Pro - Quick Help
+
+1. Project Setup:
+   • Input Folder: Select the folder containing your images
+   • Output Folder: Choose where to save annotations
+   • Labels: Enter object labels separated by commas
+
+2. Keyboard Shortcuts:
+   • Enter: Start new project
+   • F1: Show this help
+   • Escape: Exit application
+
+3. Tips:
+   • You can drag and drop folders into the entry fields
+   • Labels can be added/edited later in the annotation screen
+   • Annotations are auto-saved every 5 minutes
+        """
+        messagebox.showinfo("Help", help_text)
 
     def load_previous_project(self):
         project_file = filedialog.askopenfilename(defaultextension=".json", filetypes=[("Project Files", "*.json")])
@@ -196,6 +260,9 @@ class ImageAnnotator:
             messagebox.showerror("Error", "Please specify at least one object label")
             return
             
+        # Set the first label as default
+        self.current_label.set(self.label_list[0])
+            
         # Setup annotation screen
         self.show_annotation_screen()
         
@@ -231,8 +298,24 @@ class ImageAnnotator:
         label_frame.pack(side=LEFT, padx=10)
         
         ttk.Label(label_frame, text="Label:").pack(side=LEFT, padx=5)
+        
+        # Add label management and editing
+        edit_frame = ttk.Frame(label_frame)
+        edit_frame.pack(side=LEFT)
+        
         self.label_menu = ttk.Combobox(label_frame, textvariable=self.current_label, values=self.label_list, width=15)
         self.label_menu.pack(side=LEFT, padx=5)
+        
+        # Make combobox editable
+        self.label_menu.configure(state='normal')
+        
+        # Add functionality to handle new label addition
+        def add_new_label(event):
+            new_label = self.current_label.get().strip()
+            if new_label and new_label not in self.label_list:
+                self.label_list.append(new_label)
+                self.label_menu['values'] = self.label_list
+        self.label_menu.bind('<Return>', add_new_label)
         
         # Add color indicator
         self.color_indicator = Label(label_frame, text="■", font=("Arial", 16), fg=self.get_label_color(self.current_label.get()))
@@ -888,8 +971,27 @@ class ImageAnnotator:
                 pass  # Window might be closed
 
     def try_load_existing_annotations(self):
-        # Check for existing CSV file
+        # First clear any existing annotations to prevent duplicates
+        self.annotations_per_image = {}
+        
+        # Check for both CSV and JSON project files
         csv_path = os.path.join(self.o_path, "annotations.csv")
+        json_path = os.path.join(self.o_path, "project.json")
+        
+        # First try loading from project.json as it contains more metadata
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r') as f:
+                    project_data = json.load(f)
+                    self.annotations_per_image = project_data.get('annotations', {})
+                    self.label_colors = project_data.get('label_colors', {})
+                    print(f"Loaded {len(self.annotations_per_image)} annotated images from project file")
+                    return
+            except Exception as e:
+                print(f"Error loading project file: {str(e)}")
+                self.annotations_per_image = {}  # Reset annotations if error
+        
+        # Fall back to CSV if no project file or error loading it
         if os.path.exists(csv_path):
             try:
                 with open(csv_path, "r", newline="") as file:
@@ -916,10 +1018,12 @@ class ImageAnnotator:
                         if img_name not in self.annotations_per_image:
                             self.annotations_per_image[img_name] = []
                         self.annotations_per_image[img_name].append(ann)
-                        
-                messagebox.showinfo("Annotations Loaded", f"Loaded existing annotations from {csv_path}")
+                
+                print(f"Loaded {len(self.annotations_per_image)} annotated images from CSV file")
             except Exception as e:
+                print(f"Error loading CSV annotations: {str(e)}")
                 messagebox.showwarning("Warning", f"Failed to load existing annotations: {str(e)}")
+                self.annotations_per_image = {}  # Reset annotations if error
 
     def save_annotations(self):
         if not self.images:
