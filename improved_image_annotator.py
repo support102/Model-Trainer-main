@@ -799,14 +799,16 @@ Image Annotator Pro - Quick Help
         self.annotation_count.config(text=f"Annotations: {count}")
 
     def show_image(self, index):
-        if not self.images:
+        if not self.image_files:
             return
             
         # Clear canvas
         self.canvas.delete("all")
         
-        # Get current image
-        img = self.images[index]
+        # Get current image with lazy loading
+        img = self._load_image(index)
+        if not img:
+            return
         img_w, img_h = img.size
         
         # Get canvas dimensions and update if needed
@@ -911,64 +913,131 @@ Image Annotator Pro - Quick Help
         self.show_image(self.current)
 
     def load_images(self):
+        """Load images with optimizations for handling large datasets"""
         # Reset existing values
-        self.images = []
+        self.images = {}  # Change to dictionary for lazy loading
         self.image_files = []
         self.current = 0
-        self.resized_images_cache.clear()  # Clear cache when loading new images
+        self.resized_images_cache = {}
+        self.total_loaded = 0
         
         try:
-            # Get image files
-            valid_extensions = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
-            file_list = [f for f in os.listdir(self.i_path) 
-                        if os.path.isfile(os.path.join(self.i_path, f)) and 
-                        f.lower().endswith(valid_extensions)]
+            # Create progress window
+            progress_window = Toplevel(self.root)
+            progress_window.title("Loading Images")
+            progress_window.geometry("300x150")
+            progress_window.transient(self.root)
+            progress_window.grab_set()
             
+            # Configure progress window
+            progress_window.grid_rowconfigure(0, weight=1)
+            progress_window.grid_columnconfigure(0, weight=1)
+            
+            # Create progress frame
+            progress_frame = ttk.Frame(progress_window, padding="20")
+            progress_frame.grid(row=0, column=0, sticky="nsew")
+            
+            # Create progress label
+            progress_label = ttk.Label(progress_frame, text="Scanning image files...")
+            progress_label.grid(row=0, column=0, pady=(0, 10))
+            
+            # Create progress bar
+            progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=200)
+            progress_bar.grid(row=1, column=0)
+            
+            valid_extensions = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
+            file_list = []
+            
+            # Scan directory with progress update
+            all_files = os.listdir(self.i_path)
+            for i, f in enumerate(all_files):
+                if os.path.isfile(os.path.join(self.i_path, f)) and f.lower().endswith(valid_extensions):
+                    file_list.append(f)
+                progress_bar['value'] = (i + 1) / len(all_files) * 100
+                progress_window.update()
             # Sort files alphabetically
             file_list.sort()
             
             # Create full paths
             self.image_files = [os.path.join(self.i_path, f) for f in file_list]
             
-            # Load first image immediately, load others in background
-            if self.image_files:
-                self.images.append(Image.open(self.image_files[0]))
+            if not self.image_files:
+                messagebox.showwarning("Warning", "No valid images found in selected directory")
+                progress_window.destroy()
+                return
                 
-                # Start background loading of other images
-                threading.Thread(target=self._load_remaining_images, 
-                              args=(self.image_files[1:],), 
-                              daemon=True).start()
+            # Update progress message
+            progress_label.config(text=f"Found {len(self.image_files)} images\nPreloading first few images...")
+            progress_window.update()
+            
+            # Preload first few images for faster initial display
+            for i in range(min(5, len(self.image_files))):
+                self._load_image(i)
+                progress_bar['value'] = (i + 1) / min(5, len(self.image_files)) * 100
+                progress_window.update()
+            
+            progress_window.destroy()
+            
+            # Start background loading
+            self.loading_thread = threading.Thread(target=self._background_loader,
+                                                daemon=True)
+            self.loading_thread.start()
             
             # Update UI
-            if self.images:
-                # Wait for canvas to be properly initialized
-                self.root.update_idletasks()
-                self.canvas.after(100, lambda: self.show_image(0))  # Slight delay to ensure proper sizing
-                
-                # Try to load existing annotations
-                self.try_load_existing_annotations()
-            else:
-                messagebox.showwarning("Warning", "No valid images found in selected directory")
-                
+            self.root.update_idletasks()
+            self.canvas.after(100, lambda: self.show_image(0))
+            
+            # Try to load existing annotations
+            self.try_load_existing_annotations()
+            
+            # Start progress updater
+            self._update_loading_progress()
+            
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load images: {str(e)}")
+            if 'progress_window' in locals():
+                progress_window.destroy()
 
-    def _load_remaining_images(self, file_paths):
-        """Load remaining images in background thread"""
-        for file_path in file_paths:
+    def _load_image(self, index):
+        """Load a single image at the specified index"""
+        if index not in self.images and 0 <= index < len(self.image_files):
             try:
-                img = Image.open(file_path)
-                self.images.append(img)
+                img = Image.open(self.image_files[index])
+                self.images[index] = img
+                self.total_loaded += 1
+                return img
             except Exception as e:
-                print(f"Error loading {file_path}: {e}")
+                print(f"Error loading image {self.image_files[index]}: {e}")
+        return self.images.get(index)
+
+    def _background_loader(self):
+        """Background thread for loading remaining images"""
+        try:
+            # Load images in batches
+            batch_size = 10
+            for i in range(0, len(self.image_files), batch_size):
+                if not hasattr(self, 'loading_thread'):
+                    break  # Stop if window is closed
+                    
+                # Load next batch
+                batch_end = min(i + batch_size, len(self.image_files))
+                for j in range(i, batch_end):
+                    if j not in self.images:
+                        self._load_image(j)
                 
-        # Update UI if all images are loaded
-        if len(self.images) == len(self.image_files):
-            try:
-                self.root.after(0, self.statusBar.config, 
-                              {"text": f"All {len(self.images)} images loaded"})
-            except:
-                pass  # Window might be closed
+                # Small delay to prevent overwhelming the system
+                time.sleep(0.1)
+                
+        except Exception as e:
+            print(f"Background loader error: {e}")
+
+    def _update_loading_progress(self):
+        """Update status bar with loading progress"""
+        if hasattr(self, 'statusBar') and self.total_loaded < len(self.image_files):
+            self.statusBar.config(text=f"Loading images: {self.total_loaded}/{len(self.image_files)}")
+            self.root.after(1000, self._update_loading_progress)
+        elif hasattr(self, 'statusBar'):
+            self.statusBar.config(text=f"All {len(self.image_files)} images loaded")
 
     def try_load_existing_annotations(self):
         # First clear any existing annotations to prevent duplicates
