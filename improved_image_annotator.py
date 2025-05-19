@@ -270,15 +270,28 @@ class ImageAnnotator:
         self.canvas_frame = ttk.Frame(main_frame)
         self.canvas_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
         
-        # Create canvas with scrollbars
-        self.canvas = Canvas(self.canvas_frame, bg="#2c3e50", highlightthickness=0)
-        self.canvas.pack(fill=BOTH, expand=True)
+        # Create canvas container with specific size
+        canvas_container = ttk.Frame(self.canvas_frame)
+        canvas_container.pack(fill=BOTH, expand=True)
         
-        self.h_scrollbar = Scrollbar(self.canvas_frame, orient=HORIZONTAL, command=self.canvas.xview)
-        self.h_scrollbar.pack(side=BOTTOM, fill=X)
+        # Configure grid weights for proper centering
+        canvas_container.grid_rowconfigure(0, weight=1)
+        canvas_container.grid_columnconfigure(0, weight=1)
         
-        self.v_scrollbar = Scrollbar(self.canvas_frame, orient=VERTICAL, command=self.canvas.yview)
-        self.v_scrollbar.pack(side=RIGHT, fill=Y)
+        # Force the canvas container to have a minimum size
+        canvas_container.update_idletasks()
+        min_width = self.root.winfo_width() - 40
+        min_height = self.root.winfo_height() - 100
+        canvas_container.config(width=min_width, height=min_height)
+        
+        self.canvas = Canvas(canvas_container, bg="#2c3e50", highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        
+        self.v_scrollbar = Scrollbar(canvas_container, orient=VERTICAL, command=self.canvas.yview)
+        self.v_scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        self.h_scrollbar = Scrollbar(canvas_container, orient=HORIZONTAL, command=self.canvas.xview)
+        self.h_scrollbar.grid(row=1, column=0, sticky="ew")
         
         self.canvas.config(xscrollcommand=self.h_scrollbar.set, yscrollcommand=self.v_scrollbar.set)
         
@@ -556,7 +569,7 @@ class ImageAnnotator:
         
         # Start drawing rectangle
         self.current_points = [(x, y), (x, y)]
-        self.show_image(self.current)
+        self.temp_rect = None  # Store the temporary rectangle ID
 
     def draw_shape_update(self, event):
         if not self.images or not self.current_points:
@@ -568,7 +581,39 @@ class ImageAnnotator:
         # Update rectangle end point
         if len(self.current_points) == 2:
             self.current_points[1] = (x, y)
-            self.show_image(self.current)
+            
+            # Get canvas scale and offsets
+            img = self.images[self.current]
+            img_w, img_h = img.size
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            base_scale = min(canvas_width / img_w, canvas_height / img_h)
+            scale = base_scale * self.display_scale
+            
+            # Calculate image position
+            img_display_w = int(img_w * scale)
+            img_display_h = int(img_h * scale)
+            img_x = max(0, (canvas_width - img_display_w) // 2)
+            img_y = max(0, (canvas_height - img_display_h) // 2)
+            
+            # Scale coordinates
+            (x1, y1), (x2, y2) = self.current_points
+            sx1 = img_x + x1 * scale
+            sy1 = img_y + y1 * scale
+            sx2 = img_x + x2 * scale
+            sy2 = img_y + y2 * scale
+            
+            # Update or create temporary rectangle
+            color = self.get_label_color(self.current_label.get())
+            if self.temp_rect:
+                self.canvas.coords(self.temp_rect, sx1, sy1, sx2, sy2)
+            else:
+                self.temp_rect = self.canvas.create_rectangle(
+                    sx1, sy1, sx2, sy2, 
+                    outline=color, 
+                    dash=(2,2), 
+                    width=2
+                )
 
     def draw_shape_finalize(self, event):
         if not self.images or not self.current_points:
@@ -581,9 +626,14 @@ class ImageAnnotator:
             # Only add annotation if it's not too small
             if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
                 self.add_annotation("Rectangle", self.current_points)
+                self.show_image(self.current)  # Refresh to show final state
+            else:
+                # Remove temporary rectangle if too small
+                if self.temp_rect:
+                    self.canvas.delete(self.temp_rect)
                 
         self.current_points = []
-        self.show_image(self.current)
+        self.temp_rect = None
 
     def get_image_coords(self, canvas_x, canvas_y):
         if not self.images:
@@ -676,13 +726,14 @@ class ImageAnnotator:
         img = self.images[index]
         img_w, img_h = img.size
         
-        # Get canvas dimensions
+        # Get canvas dimensions and update if needed
+        self.canvas.update_idletasks()  # Force geometry update
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
         # Ensure canvas has proper dimensions
         if canvas_width < 10 or canvas_height < 10:
-            canvas_width, canvas_height = 1200, 800
+            canvas_width, canvas_height = self.root.winfo_width() - 40, self.root.winfo_height() - 100  # Adjust for padding
             
         # Calculate scale based on zoom factor
         base_scale = min(canvas_width / img_w, canvas_height / img_h)
@@ -712,8 +763,15 @@ class ImageAnnotator:
         img_x = max(0, (canvas_width - new_w) // 2)
         img_y = max(0, (canvas_height - new_h) // 2)
         
+        # Create a larger scroll region to allow for proper centering
+        scroll_width = max(canvas_width, new_w + img_x * 2)
+        scroll_height = max(canvas_height, new_h + img_y * 2)
+        
         # Draw image
         self.canvas.create_image(img_x, img_y, image=self.canvas.image, anchor=NW)
+        
+        # Set scroll region to include padding
+        self.canvas.config(scrollregion=(0, 0, scroll_width, scroll_height))
         
         # Draw annotations
         img_name = os.path.basename(self.image_files[index])
@@ -800,7 +858,9 @@ class ImageAnnotator:
             
             # Update UI
             if self.images:
-                self.show_image(0)
+                # Wait for canvas to be properly initialized
+                self.root.update_idletasks()
+                self.canvas.after(100, lambda: self.show_image(0))  # Slight delay to ensure proper sizing
                 
                 # Try to load existing annotations
                 self.try_load_existing_annotations()
