@@ -287,7 +287,7 @@ Image Annotator Pro - Quick Help
         nav_frame = ttk.Frame(self.toolbar)
         nav_frame.pack(side=LEFT, padx=5)
         
-        self.style.configure("Nav.TButton", foreground="black")  # Configure black text color for nav buttons
+        self.style.configure("Nav.TButton", foreground="black")  # Configure black text color for all nav buttons
         ttk.Button(nav_frame, text="⏮", width=3, command=lambda: self.navigate_image_to(0), style="Nav.TButton").pack(side=LEFT, padx=2)
         ttk.Button(nav_frame, text="◀", width=3, command=lambda: self.navigate_image(-1), style="Nav.TButton").pack(side=LEFT, padx=2)
         ttk.Button(nav_frame, text="▶", width=3, command=lambda: self.navigate_image(1), style="Nav.TButton").pack(side=LEFT, padx=2)
@@ -836,9 +836,12 @@ Image Annotator Pro - Quick Help
             resample = Image.LANCZOS if scale > 1 else Image.BILINEAR
             resized_img = img.resize((new_w, new_h), resample)
             
-            # Limit cache size to prevent memory issues
-            if len(self.resized_images_cache) > 10:  # Keep only last 10 resized images
-                self.resized_images_cache.clear()
+            # Manage cache size
+            if len(self.resized_images_cache) > 5:  # Reduce cache size to 5
+                # Remove oldest entries
+                oldest_keys = list(self.resized_images_cache.keys())[:-4]  # Keep last 4
+                for k in oldest_keys:
+                    del self.resized_images_cache[k]
             self.resized_images_cache[cache_key] = resized_img
             
         # Convert to PhotoImage
@@ -902,17 +905,41 @@ Image Annotator Pro - Quick Help
         self.update_annotation_count()
 
     def navigate_image(self, step):
-        if not self.images:
+        if not self.image_files:
             return
             
-        # Calculate new index
-        new_index = (self.current + step) % len(self.images)
+        # Calculate new index with bounds checking
+        new_index = (self.current + step) % len(self.image_files)
         self.current = new_index
+        
+        # Load batch of images around new index
+        self.load_image_batch(self.current)
         
         # Show new image
         self.show_image(self.current)
+        
+        # Report memory usage if it's high
+        mem_usage = self.calculate_memory_usage()
+        if mem_usage > 1000:  # Alert if over 1GB
+            print(f"Warning: High memory usage: {mem_usage:.1f}MB")
 
     def load_images(self):
+        """Load image paths and initialize the first batch of images"""
+        # Get list of image files
+        extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+        self.image_files = [os.path.join(self.i_path, f) for f in os.listdir(self.i_path)
+                           if f.lower().endswith(extensions)]
+        self.image_files.sort()
+        
+        if not self.image_files:
+            messagebox.showerror("Error", "No valid images found in the input directory")
+            return
+
+        self.current = 0
+        self.images = {}  # Dictionary to store loaded images
+        self.load_image_batch(self.current)  # Load initial batch
+        self.show_image(self.current)
+        self.statusBar.config(text=f"Image 1 of {len(self.image_files)}")
         """Load images with optimizations for handling large datasets"""
         # Reset existing values
         self.images = {}  # Change to dictionary for lazy loading
@@ -999,37 +1026,99 @@ Image Annotator Pro - Quick Help
                 progress_window.destroy()
 
     def _load_image(self, index):
-        """Load a single image at the specified index"""
+        """Load a single image at the specified index with memory optimization"""
         if index not in self.images and 0 <= index < len(self.image_files):
             try:
-                img = Image.open(self.image_files[index])
-                self.images[index] = img
+                # Check current memory usage
+                current_mem = self.calculate_memory_usage()
+                if current_mem > 2000:  # If over 2GB
+                    # Force cleanup of distant images
+                    self.cleanup_distant_images(index, buffer=50)  # Reduced buffer during high memory
+                
+                # Open image and convert to RGB to ensure it's loaded into memory
+                with Image.open(self.image_files[index]) as img:
+                    # Determine if we should downsample the image
+                    target_max_dim = 1920  # Max dimension for large images
+                    orig_w, orig_h = img.size
+                    scale = min(1.0, target_max_dim / max(orig_w, orig_h))
+                    
+                    if scale < 1.0:
+                        new_w = int(orig_w * scale)
+                        new_h = int(orig_h * scale)
+                        img = img.resize((new_w, new_h), Image.LANCZOS)
+                    
+                    # Convert to RGB if necessary
+                    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                        rgb_img = img.convert('RGB')
+                    else:
+                        rgb_img = img.copy()
+                    
+                self.images[index] = rgb_img
                 self.total_loaded += 1
-                return img
+                
+                # Clear resize cache if it's getting too large
+                if len(self.resized_images_cache) > 10:
+                    self.resized_images_cache.clear()
+                    
+                return rgb_img
+                
             except Exception as e:
                 print(f"Error loading image {self.image_files[index]}: {e}")
+                return None
+                
         return self.images.get(index)
 
     def _background_loader(self):
-        """Background thread for loading remaining images"""
+        """Background thread for loading remaining images with memory management"""
         try:
-            # Load images in batches
+            # Initialize variables for adaptive batch loading
             batch_size = 10
+            min_batch_size = 5
+            max_batch_size = 20
+            mem_threshold = 1500  # MB
+            
             for i in range(0, len(self.image_files), batch_size):
                 if not hasattr(self, 'loading_thread'):
                     break  # Stop if window is closed
-                    
+                
+                # Check memory usage and adjust batch size
+                current_mem = self.calculate_memory_usage()
+                if current_mem > mem_threshold:
+                    # Reduce batch size if memory usage is high
+                    batch_size = max(min_batch_size, batch_size - 5)
+                    # Force cleanup of distant images
+                    self.cleanup_distant_images(self.current, buffer=50)
+                    # Wait for memory to be freed
+                    time.sleep(0.5)
+                else:
+                    # Increase batch size if memory usage is low
+                    batch_size = min(max_batch_size, batch_size + 1)
+                
                 # Load next batch
                 batch_end = min(i + batch_size, len(self.image_files))
                 for j in range(i, batch_end):
                     if j not in self.images:
                         self._load_image(j)
+                        
+                        # Update progress in status bar
+                        if hasattr(self, 'statusBar'):
+                            self.root.after(0, lambda: self.statusBar.config(
+                                text=f"Loading images: {self.total_loaded}/{len(self.image_files)}"
+                            ))
                 
-                # Small delay to prevent overwhelming the system
-                time.sleep(0.1)
+                # Adaptive delay based on memory pressure
+                delay = 0.1 if current_mem < mem_threshold else 0.5
+                time.sleep(delay)
                 
         except Exception as e:
             print(f"Background loader error: {e}")
+            
+        finally:
+            # Update status when done
+            if hasattr(self, 'statusBar'):
+                self.root.after(0, lambda: self.statusBar.config(
+                    text=f"All {len(self.image_files)} images indexed"
+                ))
 
     def _update_loading_progress(self):
         """Update status bar with loading progress"""
@@ -1119,21 +1208,39 @@ Image Annotator Pro - Quick Help
                 messagebox.showinfo("Info", "No annotations to save")
                 return
                 
-            # Save to CSV
-            fieldnames = ["image", "x1", "y1", "x2", "y2", "label", "shape"]
-            with open(f"{self.o_path}/annotations.csv", "w", newline="") as file:
-                writer = DictWriter(file, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
+            # Save to CSV using temporary file approach
+            csv_path = os.path.join(self.o_path, "annotations.csv")
+            temp_csv_path = csv_path + ".tmp"
+            
+            try:
+                fieldnames = ["image", "x1", "y1", "x2", "y2", "label", "shape"]
+                with open(temp_csv_path, "w", newline="") as file:
+                    writer = DictWriter(file, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    
+                # Only after successful write, replace the old file
+                if os.path.exists(csv_path):
+                    os.remove(csv_path)
+                os.rename(temp_csv_path, csv_path)
                 
-            # Also save project file
+            except Exception as e:
+                # Clean up temp file if something went wrong
+                if os.path.exists(temp_csv_path):
+                    try:
+                        os.remove(temp_csv_path)
+                    except:
+                        pass
+                raise e
+                
+            # Save project file using temporary file approach
             self.save_project_file()
                 
             # Update status
             self.last_save_time = datetime.now()
             self.autosave_status.config(text=f"Last saved: {self.last_save_time.strftime('%H:%M:%S')}")
             
-            messagebox.showinfo("Saved", f"Saved {len(rows)} annotations to {self.o_path}/annotations.csv")
+            messagebox.showinfo("Saved", f"Saved {len(rows)} annotations to {csv_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save annotations: {str(e)}")
 
@@ -1148,9 +1255,28 @@ Image Annotator Pro - Quick Help
             "last_saved": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        # Save as JSON
-        with open(f"{self.o_path}/project.json", "w") as f:
-            json.dump(project_data, f, indent=2)
+        # Save as JSON using temporary file approach
+        project_path = os.path.join(self.o_path, "project.json")
+        temp_project_path = project_path + ".tmp"
+        
+        try:
+            # Save to temporary file first
+            with open(temp_project_path, "w") as f:
+                json.dump(project_data, f, indent=2)
+                
+            # Only after successful write, replace the old file
+            if os.path.exists(project_path):
+                os.remove(project_path)
+            os.rename(temp_project_path, project_path)
+            
+        except Exception as e:
+            # Clean up temp file if something went wrong
+            if os.path.exists(temp_project_path):
+                try:
+                    os.remove(temp_project_path)
+                except:
+                    pass
+            raise e
 
     def setup_autosave(self):
         def autosave_worker():
@@ -1171,8 +1297,8 @@ Image Annotator Pro - Quick Help
             any_annotations = any(self.annotations_per_image.values())
             if not any_annotations:
                 return
-                
-            # Save CSV
+
+            # Prepare rows for CSV            
             rows = []
             for img_name, anns in self.annotations_per_image.items():
                 for ann in anns:
@@ -1188,20 +1314,71 @@ Image Annotator Pro - Quick Help
                     })
             
             # Save to CSV
+            autosave_path = os.path.join(self.o_path, "annotations_autosave.csv")
             fieldnames = ["image", "x1", "y1", "x2", "y2", "label", "shape"]
-            with open(f"{self.o_path}/annotations_autosave.csv", "w", newline="") as file:
-                writer = DictWriter(file, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
+            
+            # Use a temporary file to avoid file handle conflicts
+            temp_path = autosave_path + ".tmp"
+            try:
+                with open(temp_path, "w", newline="") as file:
+                    writer = DictWriter(file, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
                 
-            # Also save project file
-            self.save_project_file()
+                # Only after successful write, replace the old file
+                if os.path.exists(autosave_path):
+                    os.remove(autosave_path)
+                os.rename(temp_path, autosave_path)
+                
+            except Exception as e:
+                # Clean up temp file if something went wrong
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                raise e
+                
+            # Also save project file using temporary file approach
+            project_path = os.path.join(self.o_path, "project.json")
+            temp_project_path = project_path + ".tmp"
+            
+            try:
+                # Create project data
+                project_data = {
+                    "input_path": self.i_path,
+                    "output_path": self.o_path,
+                    "labels": self.label_list,
+                    "annotations": self.annotations_per_image,
+                    "label_colors": self.label_colors,
+                    "last_saved": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # Save to temporary file first
+                with open(temp_project_path, "w") as f:
+                    json.dump(project_data, f, indent=2)
+                    
+                # Only after successful write, replace the old file
+                if os.path.exists(project_path):
+                    os.remove(project_path)
+                os.rename(temp_project_path, project_path)
+                
+            except Exception as e:
+                # Clean up temp file if something went wrong
+                if os.path.exists(temp_project_path):
+                    try:
+                        os.remove(temp_project_path)
+                    except:
+                        pass
+                raise e
                 
             # Update status
             self.last_save_time = datetime.now()
             self.autosave_status.config(text=f"Auto-saved: {self.last_save_time.strftime('%H:%M:%S')}")
+            
         except Exception as e:
             print(f"Autosave error: {e}")
+            # Don't show error dialog for autosave failures to avoid interrupting the user
 
     def on_close(self):
         # Check if there are unsaved changes
@@ -1212,7 +1389,85 @@ Image Annotator Pro - Quick Help
             if result:  # Yes
                 self.save_annotations()
                 
+        # Cleanup resources
+        try:
+            # Clear image cache
+            for img in self.images.values():
+                try:
+                    if hasattr(img, 'close'):
+                        img.close()
+                except:
+                    pass
+                    
+            # Clear resize cache
+            for img in self.resized_images_cache.values():
+                try:
+                    if hasattr(img, 'close'):
+                        img.close()
+                except:
+                    pass
+                    
+            self.images.clear()
+            self.resized_images_cache.clear()
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+        except:
+            pass  # Ensure cleanup doesn't prevent application from closing
+            
         self.root.destroy()
+
+    def load_image_batch(self, center_idx, window_size=100):
+        """Load a batch of images around the given center index"""
+        # Calculate the range of indices to load
+        start_idx = max(0, center_idx - window_size // 2)
+        end_idx = min(len(self.image_files), center_idx + window_size // 2)
+        
+        # Clean up images that are far from current view
+        self.cleanup_distant_images(center_idx, buffer=window_size)
+        
+        # Load images in the window
+        for idx in range(start_idx, end_idx):
+            if idx not in self.images:
+                try:
+                    self._load_image(idx)
+                except Exception as e:
+                    print(f"Error loading image {self.image_files[idx]}: {str(e)}")
+                    
+    def cleanup_distant_images(self, center_idx, buffer=100):
+        """Remove images that are far from the current view"""
+        # Calculate the range of indices to keep
+        start_idx = max(0, center_idx - buffer // 2)
+        end_idx = min(len(self.image_files), center_idx + buffer // 2)
+        
+        # Get indices to remove
+        indices_to_remove = [idx for idx in self.images.keys() 
+                           if idx < start_idx or idx > end_idx]
+        
+        # Remove distant images
+        for idx in indices_to_remove:
+            try:
+                if hasattr(self.images[idx], 'close'):
+                    self.images[idx].close()
+                del self.images[idx]
+            except Exception as e:
+                print(f"Error cleaning up image {idx}: {str(e)}")
+                
+    def calculate_memory_usage(self):
+        """Calculate approximate memory usage of loaded images in MB"""
+        total_bytes = 0
+        for img in self.images.values():
+            try:
+                if isinstance(img, Image.Image):
+                    # Calculate bytes per pixel (assuming RGB or RGBA)
+                    bytes_per_pixel = len(img.getbands())
+                    # Calculate total bytes
+                    total_bytes += img.width * img.height * bytes_per_pixel
+            except:
+                continue
+        return total_bytes / (1024 * 1024)  # Convert to MB
 
 def main():
     root = Tk()
