@@ -1,0 +1,9 @@
+path: D:/desk/script/AAAAA Desktop/Model-Trainer-main/output
+train: images
+val: images
+
+names:
+  0: Person
+  1: Car
+  2: Dog
+  3: Cat

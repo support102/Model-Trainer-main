@@ -1,0 +1,133 @@
+{
+  "input_path": "D:/desk/script/AAAAA Desktop/Model-Trainer-main/input",
+  "output_path": "D:/desk/script/AAAAA Desktop/Model-Trainer-main/output",
+  "labels": [
+    "Person",
+    "Car",
+    "Dog",
+    "Cat"
+  ],
+  "annotations": {
+    "image1.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            562.2429906542056,
+            532.3364485981309
+          ],
+          [
+            1178.3177570093458,
+            1330.8411214953271
+          ]
+        ],
+        "label": "Person",
+        "color": "#2ecc71"
+      }
+    ],
+    "image2.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            598.7796610169491,
+            540.2033898305085
+          ],
+          [
+            1280.0,
+            1076.0677966101696
+          ]
+        ],
+        "label": "Dog",
+        "color": "#9b59b6"
+      }
+    ],
+    "image3.png": [
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            715.9322033898305,
+            718.1016949152543
+          ],
+          [
+            468.6101694915254,
+            451.2542372881356
+          ]
+        ],
+        "label": "Dog",
+        "color": "#9b59b6"
+      },
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            1060.8813559322034,
+            258.1694915254237
+          ],
+          [
+            1312.542372881356,
+            446.91525423728814
+          ]
+        ],
+        "label": "Person",
+        "color": "#2ecc71"
+      },
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            997.9661016949152,
+            598.7796610169491
+          ],
+          [
+            1299.5254237288136,
+            833.0847457627119
+          ]
+        ],
+        "label": "Car",
+        "color": "#f1c40f"
+      },
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            954.5762711864406,
+            763.6610169491526
+          ],
+          [
+            1219.2542372881355,
+            919.8644067796611
+          ]
+        ],
+        "label": "Cat",
+        "color": "#e74c3c"
+      },
+      {
+        "shape": "Rectangle",
+        "points": [
+          [
+            698.5762711864406,
+            275.52542372881356
+          ],
+          [
+            958.9152542372881,
+            507.66101694915255
+          ]
+        ],
+        "label": "Caterw",
+        "color": "#9b59b6"
+      }
+    ]
+  },
+  "label_colors": {
+    "Person": "#2ecc71",
+    "Dog": "#9b59b6",
+    "Car": "#f1c40f",
+    "Cat": "#e74c3c",
+    "Cate": "#2ecc71",
+    "Cater": "#e74c3c",
+    "Caterw": "#9b59b6"
+  },
+  "last_saved": "2025-05-31 16:59:02"
+}

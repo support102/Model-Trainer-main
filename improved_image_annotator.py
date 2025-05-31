@@ -41,6 +41,8 @@ class ImageAnnotator:
         self.autosave_timer = None
         self.last_save_time = None
         self.display_scale = 1.0
+        self.total_loaded = 0
+        self.autosave_interval = 1  # Default autosave interval in minutes
         
         # Define theme colors
         self.theme = {
@@ -137,7 +139,7 @@ class ImageAnnotator:
                  font=("Helvetica", 10, "bold")).pack(anchor=W, pady=(0, 5))
         self.label_entry = ttk.Entry(labels_frame)
         self.label_entry.pack(fill=X)
-        self.label_entry.insert(0, "Person, Car, Dog, Cat")
+        self.label_entry.insert(0, "Label1")  # Default label is now 'Label1'
         ttk.Label(labels_frame, text="Separate labels with commas", 
                  foreground=self.theme["dark"]).pack(anchor=W, pady=(2, 0))
         
@@ -207,28 +209,60 @@ Image Annotator Pro - Quick Help
         project_file = filedialog.askopenfilename(defaultextension=".json", filetypes=[("Project Files", "*.json")])
         if not project_file:
             return
-            
         try:
             with open(project_file, 'r') as f:
                 project_data = json.load(f)
-                
             self.i_path = project_data.get('input_path', '')
             self.o_path = project_data.get('output_path', '')
             self.label_list = project_data.get('labels', [])
             self.annotations_per_image = project_data.get('annotations', {})
             self.label_colors = project_data.get('label_colors', {})
             
+            # Set current_label to first label if available
+            if self.label_list:
+                self.current_label.set(self.label_list[0])
+            
+            # Find last annotated image
+            last_annotated = None
+            last_time = None
+            for img_name, anns in self.annotations_per_image.items():
+                for ann in anns:
+                    if 'timestamp' in ann:
+                        t = ann['timestamp']
+                    else:
+                        t = None
+                    if t and (last_time is None or t > last_time):
+                        last_time = t
+                        last_annotated = img_name
+            if not last_annotated and self.annotations_per_image:
+                # Fallback: just use the last key
+                last_annotated = list(self.annotations_per_image.keys())[-1]
+            
             # Update UI with loaded data
             self.input_entry.delete(0, END)
             self.input_entry.insert(0, self.i_path)
-            
             self.output_entry.delete(0, END)
             self.output_entry.insert(0, self.o_path)
-            
             self.label_entry.delete(0, END)
             self.label_entry.insert(0, ", ".join(self.label_list))
-            
+            # Set current_label to first label if available
+            if self.label_list:
+                self.current_label.set(self.label_list[0])
             messagebox.showinfo("Project Loaded", f"Successfully loaded project with {len(self.annotations_per_image)} annotated images")
+            
+            # Go to annotation screen and load images
+            self.show_annotation_screen()
+            self.load_images()
+            self.setup_autosave()
+            # After images are loaded, jump to last annotated image
+            if last_annotated:
+                def jump_to_last():
+                    for idx, path in enumerate(self.image_files):
+                        if os.path.basename(path) == last_annotated:
+                            self.current = idx
+                            self.show_image(self.current)
+                            break
+                self.root.after(1000, jump_to_last)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load project: {str(e)}")
 
@@ -269,6 +303,7 @@ Image Annotator Pro - Quick Help
         # Load images and start autosave timer
         self.load_images()
         self.setup_autosave()
+        self.update_label_counts()
 
     def show_annotation_screen(self):
         # Clear current widgets
@@ -344,7 +379,7 @@ Image Annotator Pro - Quick Help
         # Right side buttons
         right_frame = ttk.Frame(self.toolbar)
         right_frame.pack(side=RIGHT, padx=5)
-        
+
         ttk.Button(right_frame, text="Save", command=self.save_annotations, style="Nav.TButton").pack(side=RIGHT, padx=5)
         ttk.Button(right_frame, text="Export", command=self.export_menu, style="Nav.TButton").pack(side=RIGHT, padx=5)
         ttk.Button(right_frame, text="Settings", command=self.show_settings, style="Nav.TButton").pack(side=RIGHT, padx=5)
@@ -388,15 +423,31 @@ Image Annotator Pro - Quick Help
         # Status bar
         status_frame = ttk.Frame(main_frame, padding="5")
         status_frame.pack(fill=X, side=BOTTOM)
-        
-        self.statusBar = ttk.Label(status_frame, text="No images loaded.", anchor=E)
-        self.statusBar.pack(side=RIGHT)
-        
+
         self.annotation_count = ttk.Label(status_frame, text="Annotations: 0", anchor=W)
         self.annotation_count.pack(side=LEFT)
-        
+
+        self.statusBar = ttk.Label(status_frame, text="No images loaded.", anchor=CENTER)
+        self.statusBar.pack(side=LEFT, expand=True)
+
+        self.loadingStatusBar = ttk.Label(status_frame, text="", anchor=E)
+        self.loadingStatusBar.pack(side=RIGHT)
+
         self.autosave_status = ttk.Label(status_frame, text="", anchor=W)
         self.autosave_status.pack(side=LEFT, padx=20)
+
+        # --- Label Count Visualization (Top Right, below buttons) ---
+        # Place the label count frame below the right_frame (Save/Export/Settings buttons)
+        self.label_count_frame = ttk.Frame(main_frame, padding="8", relief="groove", borderwidth=2)
+        self.label_count_frame.place(relx=1.0,x=-27, y=50, anchor="ne")  # y=50 shifts it below the buttons
+        ttk.Label(self.label_count_frame, text="Label Counts", font=("Arial", 10, "bold")).pack(anchor="n", pady=(0, 5))
+        self.label_count_labels = {}
+        for label in self.label_list:
+            lbl = ttk.Label(self.label_count_frame, text=f"{label}: 0", foreground=self.get_label_color(label), anchor="w")
+            lbl.pack(anchor="w", padx=3)
+            self.label_count_labels[label] = lbl
+        self.update_label_counts()
+        # --- End Label Count Visualization ---
         
         # Bind keyboard shortcuts
         self.root.bind('<Left>', lambda e: self.navigate_image(-1))
@@ -450,11 +501,22 @@ Image Annotator Pro - Quick Help
 
     def export_yolo_format(self):
         try:
-            # Create classes.txt
+            # Ensure 'labels' directory exists
+            labels_dir = os.path.join(self.o_path, "labels")
+            os.makedirs(labels_dir, exist_ok=True)
+
+            # Create classes.txt in output and labels directory
             with open(os.path.join(self.o_path, "classes.txt"), "w") as f:
                 for label in self.label_list:
                     f.write(f"{label}\n")
+            with open(os.path.join(labels_dir, "classes.txt"), "w") as f:
+                for label in self.label_list:
+                    f.write(f"{label}\n")
             
+            # Ensure 'labels' directory exists
+            labels_dir = os.path.join(self.o_path, "labels")
+            os.makedirs(labels_dir, exist_ok=True)
+
             # Process each image
             for img_idx, img_path in enumerate(self.image_files):
                 img_name = os.path.basename(img_path)
@@ -465,11 +527,13 @@ Image Annotator Pro - Quick Help
                     continue
                     
                 # Get image dimensions
-                img = self.images[img_idx]
+                img = self._load_image(img_idx)  # Use _load_image to ensure image is loaded
+                if img is None:
+                    raise Exception(f"Failed to load image: {img_path}")
                 img_w, img_h = img.size
                 
-                # Create YOLO format file
-                with open(os.path.join(self.o_path, f"{base_name}.txt"), "w") as f:
+                # Create YOLO format file in labels directory
+                with open(os.path.join(labels_dir, f"{base_name}.txt"), "w") as f:
                     for ann in self.annotations_per_image.get(img_name, []):
                         (x1, y1), (x2, y2) = ann["points"]
                         
@@ -486,7 +550,29 @@ Image Annotator Pro - Quick Help
                         # Write to file
                         f.write(f"{class_idx} {center_x:.6f} {center_y:.6f} {width:.6f} {height:.6f}\n")
             
-            messagebox.showinfo("Export Complete", f"YOLO format annotations exported to {self.o_path}")
+            messagebox.showinfo(
+                "Export Complete",
+                f"YOLO format annotations exported to {self.o_path}\n\n"
+                "Please arrange your data as follows:\n"
+                f"- {self.i_path} (input folder) should contain all images in a folder named 'images'\n"
+                f"- {self.o_path} (output folder) should contain:\n"
+                "    - labels/ (all .txt files and classes.txt)\n"
+                "    - config.yaml\n"
+                "    - classes.txt\n"
+                "    - annotations.csv, annotations_autosave.csv, project.json (if present)\n"
+                "    - images/ (if you want to copy images for YOLO training)\n"
+            )
+
+            # --- Write config.yaml for YOLO ---
+            config_path = os.path.join(self.o_path, "config.yaml")
+            with open(config_path, "w") as f:
+                f.write(f"path: {self.o_path}\n")
+                f.write("train: images\n")
+                f.write("val: images\n\n")
+                f.write("names:\n")
+                for idx, label in enumerate(self.label_list):
+                    f.write(f"  {idx}: {label}\n")
+            # --- End config.yaml ---
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export YOLO format: {str(e)}")
 
@@ -504,9 +590,20 @@ Image Annotator Pro - Quick Help
         autosave_frame.pack(fill=X)
         
         ttk.Label(autosave_frame, text="Autosave Interval (minutes):").pack(side=LEFT, padx=5)
-        autosave_var = StringVar(value="5")
+        autosave_var = StringVar(value=str(getattr(self, 'autosave_interval', 1)))
         autosave_entry = ttk.Entry(autosave_frame, textvariable=autosave_var, width=5)
         autosave_entry.pack(side=LEFT, padx=5)
+        
+        def save_autosave_setting():
+            try:
+                val = int(autosave_var.get())
+                if val < 1:
+                    val = 1
+                self.autosave_interval = val
+                messagebox.showinfo("Settings", f"Autosave interval set to {val} minute(s)")
+            except Exception:
+                messagebox.showerror("Error", "Please enter a valid number for autosave interval.")
+        ttk.Button(autosave_frame, text="Save", command=save_autosave_setting, style="Nav.TButton").pack(side=LEFT, padx=10)
         
         # Keyboard shortcuts
         ttk.Label(settings_window, text="Keyboard Shortcuts", font=("Arial", 10, "bold")).pack(pady=(20, 10), anchor=W, padx=20)
@@ -611,6 +708,7 @@ Image Annotator Pro - Quick Help
         self.annotations_per_image[img_name] = []
         self.show_image(self.current)
         self.update_annotation_count()
+        self.update_label_counts()
 
     def undo_last_annotation(self):
         if not self.undo_stack:
@@ -631,6 +729,7 @@ Image Annotator Pro - Quick Help
             
         self.show_image(self.current)
         self.update_annotation_count()
+        self.update_label_counts()
 
     def navigate_image_to(self, idx):
         if not self.images:
@@ -788,15 +887,27 @@ Image Annotator Pro - Quick Help
         # Add annotation
         self.annotations_per_image[img_name].append(ann)
         self.update_annotation_count()
+        self.update_label_counts()
+
+    def update_label_counts(self):
+        # Count annotations for each label across all images
+        label_counts = {label: 0 for label in self.label_list}
+        for anns in self.annotations_per_image.values():
+            for ann in anns:
+                if ann["label"] in label_counts:
+                    label_counts[ann["label"]] += 1
+        # Update label count labels
+        for label, lbl_widget in self.label_count_labels.items():
+            lbl_widget.config(text=f"{label}: {label_counts.get(label, 0)}")
 
     def update_annotation_count(self):
         if not self.images:
             self.annotation_count.config(text="Annotations: 0")
             return
-            
         img_name = os.path.basename(self.image_files[self.current])
         count = len(self.annotations_per_image.get(img_name, []))
         self.annotation_count.config(text=f"Annotations: {count}")
+        self.update_label_counts()
 
     def show_image(self, index):
         if not self.image_files:
@@ -900,7 +1011,13 @@ Image Annotator Pro - Quick Help
         
         # Update status bar
         self.statusBar.config(text=f"Image {index + 1} of {len(self.images)} | {img_name} | {img_w}×{img_h}px")
-        
+        # Only update loadingStatusBar with loading info, not statusBar
+        if hasattr(self, 'loadingStatusBar'):
+            if self.total_loaded < len(self.image_files):
+                self.loadingStatusBar.config(text=f"Loading images: {self.total_loaded}/{len(self.image_files)}")
+            else:
+                self.loadingStatusBar.config(text="All images loaded")
+
         # Update annotation count
         self.update_annotation_count()
 
@@ -1101,8 +1218,8 @@ Image Annotator Pro - Quick Help
                         self._load_image(j)
                         
                         # Update progress in status bar
-                        if hasattr(self, 'statusBar'):
-                            self.root.after(0, lambda: self.statusBar.config(
+                        if hasattr(self, 'loadingStatusBar'):
+                            self.root.after(0, lambda: self.loadingStatusBar.config(
                                 text=f"Loading images: {self.total_loaded}/{len(self.image_files)}"
                             ))
                 
@@ -1122,11 +1239,11 @@ Image Annotator Pro - Quick Help
 
     def _update_loading_progress(self):
         """Update status bar with loading progress"""
-        if hasattr(self, 'statusBar') and self.total_loaded < len(self.image_files):
-            self.statusBar.config(text=f"Loading images: {self.total_loaded}/{len(self.image_files)}")
+        if hasattr(self, 'loadingStatusBar') and self.total_loaded < len(self.image_files):
+            self.loadingStatusBar.config(text=f"Loading images: {self.total_loaded}/{len(self.image_files)}")
             self.root.after(1000, self._update_loading_progress)
-        elif hasattr(self, 'statusBar'):
-            self.statusBar.config(text=f"All {len(self.image_files)} images loaded")
+        elif hasattr(self, 'loadingStatusBar'):
+            self.loadingStatusBar.config(text="All images loaded")
 
     def try_load_existing_annotations(self):
         # First clear any existing annotations to prevent duplicates
@@ -1281,11 +1398,12 @@ Image Annotator Pro - Quick Help
     def setup_autosave(self):
         def autosave_worker():
             while True:
-                time.sleep(300)  # Default 5 minute interval
+                interval = getattr(self, 'autosave_interval', 1)
+                time.sleep(interval * 60)  # Use user setting, default 1 min
                 if self.images and self.annotations_per_image:
                     # Only save if there are annotations and they haven't been saved recently
-                    if not self.last_save_time or (datetime.now() - self.last_save_time).seconds > 60:
-                        self.root.after(0, self.autosave)
+                    if not self.last_save_time or (datetime.now() - self.last_save_time).seconds > 30:
+                        self.autosave()
 
         # Start autosave in a separate thread
         self.autosave_timer = threading.Thread(target=autosave_worker, daemon=True)
