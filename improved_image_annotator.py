@@ -334,30 +334,18 @@ Image Annotator Pro - Quick Help
         
         ttk.Label(label_frame, text="Label:").pack(side=LEFT, padx=5)
         
-        # Add label management and editing
-        edit_frame = ttk.Frame(label_frame)
-        edit_frame.pack(side=LEFT)
-        
-        self.label_menu = ttk.Combobox(label_frame, textvariable=self.current_label, values=self.label_list, width=15)
+        # --- Disable label editing in annotation screen ---
+        # Remove label management and editing UI
+        # (No edit_frame, no editable combobox, no add_new_label binding)
+        # Only show a readonly combobox for label selection
+        self.label_menu = ttk.Combobox(label_frame, textvariable=self.current_label, values=self.label_list, width=15, state='readonly')
         self.label_menu.pack(side=LEFT, padx=5)
-        
-        # Make combobox editable
-        self.label_menu.configure(state='normal')
-        
-        # Add functionality to handle new label addition
-        def add_new_label(event):
-            new_label = self.current_label.get().strip()
-            if new_label and new_label not in self.label_list:
-                self.label_list.append(new_label)
-                self.label_menu['values'] = self.label_list
-        self.label_menu.bind('<Return>', add_new_label)
-        
         # Add color indicator
         self.color_indicator = Label(label_frame, text="■", font=("Arial", 16), fg=self.get_label_color(self.current_label.get()))
         self.color_indicator.pack(side=LEFT, padx=5)
-        
         # Bind label change event
         self.current_label.trace("w", self.on_label_change)
+        # --- End disable label editing ---
         
         # Tool buttons
         tool_frame = ttk.Frame(self.toolbar)
