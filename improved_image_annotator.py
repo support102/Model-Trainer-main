@@ -440,8 +440,10 @@ Image Annotator Pro - Quick Help
         # Bind keyboard shortcuts
         self.root.bind('<Left>', lambda e: self.navigate_image(-1))
         self.root.bind('<Right>', lambda e: self.navigate_image(1))
-        self.root.bind('a', lambda e: self.navigate_image(-1))  # A key for previous image
-        self.root.bind('d', lambda e: self.navigate_image(1))   # D key for next image
+        self.root.bind('a', lambda e: self.navigate_image(-1))
+        self.root.bind('A', lambda e: self.navigate_image(-1))  # A key for previous image
+        self.root.bind('d', lambda e: self.navigate_image(1))
+        self.root.bind('D', lambda e: self.navigate_image(1))   # D key for next image
         self.root.bind('<Return>', lambda e: self.save_annotations())
         self.root.bind('<Control-z>', lambda e: self.undo_last_annotation())
         self.root.bind('<Control-s>', lambda e: self.save_annotations())
